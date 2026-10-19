@@ -12,7 +12,7 @@
 
 | Компонент | Куда | Зачем |
 |---|---|---|
-| **AIEditorStack** (этот репозиторий) | `<UE>\Engine\Plugins\Marketplace\AIEditorStack` | Плагин-«рубильник» без кода (`EnabledByDefault`). Включает во всех проектах Unreal MCP, тулсеты Epic и VibeUE **только в редакторе**, в собранные игры ничего не попадает. Для отдельного проекта отключается галочкой в *Edit → Plugins* |
+| **AIEditorStack** (этот репозиторий) | `<UE>\Engine\Plugins\Marketplace\AIEditorStack` | Плагин только для редактора (`EnabledByDefault`, без C++, ничего не компилируется). Включает во всех проектах Unreal MCP, тулсеты Epic и VibeUE (в собранные игры ничего не попадает) и добавляет свои Python-тулсеты: [`SketchfabTools`](#модели-sketchfab-sketchfabtools). Для отдельного проекта отключается галочкой в *Edit → Plugins* |
 | **VibeUE** (сторонний, MIT) | `<UE>\Engine\Plugins\Marketplace\VibeUE` | Собирается из исходников под твою версию движка (1–5 мин) |
 | Автозапуск MCP-сервера | `%LOCALAPPDATA%\Unreal Engine\Engine\Config\UserEditorPerProjectUserSettings.ini` | Пользовательский слой конфигов: сервер `127.0.0.1:8000/mcp` стартует с редактором в любом проекте и любой версии UE |
 | Claude Code | `~/.claude.json`, `~/.claude/settings.json`, `~/.claude/CLAUDE.md` | MCP-сервер `unreal-mcp` (user scope), официальный плагин Epic `unreal-engine-skills-for-claude-code`, блок правил для агента (действует только в папках с `.uproject`) |
@@ -34,6 +34,27 @@
 
 Скрипт идемпотентный: повторный запуск безопасен и заодно обновляет VibeUE. Флаги: `-SkipVibeUE`, `-SkipClaude`, `-VibeUEBranch <ветка>`, `-Port <n>`.
 Тулсеты, которых нет в новой версии движка, скрипт пропускает и сообщает об этом. Новые тулсеты Epic добавляй в `AIEditorStack/AIEditorStack.uplugin`. Хотфиксы (5.8.x) ничего не требуют.
+
+## Модели Sketchfab (SketchfabTools)
+
+Python-тулсет, зарегистрированный в Unreal MCP рядом с тулсетами Epic (`ai_editor_stack.toolsets.sketchfab.SketchfabTools`):
+
+| Инструмент | Что делает |
+|---|---|
+| `search` | Поиск скачиваемых моделей. По умолчанию скрывает лицензии NonCommercial / NoDerivs / Editorial; фильтры по лицензии, числу треугольников, анимации; сортировка по релевантности, лайкам, просмотрам, дате |
+| `get_model` | Подробности и полные условия лицензии |
+| `import_model` | Качает GLB (или glTF в zip) с прогресс-окном (можно отменить), импортирует через Interchange в `/Game/Sketchfab/<Модель>_<id>`, ставит ассетам метаданные `Sketchfab.*` и дописывает строку атрибуции в `<Проект>/Credits/Sketchfab.md`. Ограниченные лицензии только с явного согласия (`allow_restricted_license`) |
+| `get_account` | Проверка сохранённого токена |
+
+Для поиска ничего не нужно. Для скачивания нужен API-токен бесплатного аккаунта Sketchfab (<https://sketchfab.com/settings/password> → *API Token*):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\set_sketchfab_token.ps1
+```
+
+Ввод скрыт, токен проверяется на Sketchfab и хранится только в `%LOCALAPPDATA%\ue-ai-editor-stack\sketchfab_token.txt` (или задай переменную `SKETCHFAB_API_TOKEN`). Перезапуск редактора не нужен.
+
+Большинство бесплатных моделей под Creative Commons: **CC BY** требует указывать автора, **NC** запрещает коммерческое использование, **ND** запрещает распространять изменённые версии. Храни `Credits/Sketchfab.md` вместе с проектом. Для ассетов Fab / Quixel используй `FabService` из VibeUE (импорт из своей библиотеки работает через вход в Epic).
 
 ## Что намеренно не включено
 

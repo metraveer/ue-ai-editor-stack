@@ -88,17 +88,16 @@ if (-not $SkipVibeUE) {
 }
 
 # ---------- 2. AIEditorStack ----------
-Step "AIEditorStack (engine-wide switch)"
+Step "AIEditorStack (engine-wide switch + Python toolsets)"
 $tpl = "$Root\AIEditorStack\AIEditorStack.uplugin"
 $j = [IO.File]::ReadAllText($tpl, $Utf8) | ConvertFrom-Json
 $have = @{}
 Get-ChildItem "$EngineDir\Engine\Plugins" -Recurse -Filter *.uplugin -ErrorAction SilentlyContinue | ForEach-Object { $have[$_.BaseName] = $true }
 $missing = @($j.Plugins | Where-Object { -not $have[$_.Name] } | ForEach-Object { $_.Name })
 $dstDir = "$Market\AIEditorStack"
-New-Item -ItemType Directory -Force $dstDir | Out-Null
-if ($missing.Count -eq 0) {
-  Copy-Item $tpl "$dstDir\AIEditorStack.uplugin" -Force
-} else {
+robocopy "$Root\AIEditorStack" $dstDir /MIR /XD __pycache__ /NFL /NDL /NJH /NJS /NP | Out-Null
+if ($LASTEXITCODE -ge 8) { throw "Could not copy AIEditorStack to $dstDir (robocopy $LASTEXITCODE)" }
+if ($missing.Count -gt 0) {
   Warn ("Not in this engine, skipped (otherwise the editor won't start): " + ($missing -join ', '))
   $j.Plugins = @($j.Plugins | Where-Object { $have[$_.Name] })
   [IO.File]::WriteAllText("$dstDir\AIEditorStack.uplugin", (($j | ConvertTo-Json -Depth 10) -replace '\\u0027', "'"), $Utf8)

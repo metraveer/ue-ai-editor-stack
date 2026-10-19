@@ -23,6 +23,7 @@ $tl = Invoke-Mcp @{ jsonrpc = '2.0'; id = 2; method = 'tools/list'; params = @{}
 $ls = Invoke-Mcp @{ jsonrpc = '2.0'; id = 3; method = 'tools/call'; params = @{ name = 'list_toolsets'; arguments = @{} } }
 $lsText = ($ls.result.content | Where-Object { $_.type -eq 'text' } | ForEach-Object { $_.text }) -join ''
 "OK  VibeUE toolsets: " + ([regex]::Matches($lsText, 'VibeUE\.[A-Za-z]+')).Value.Count
+if ($lsText -match 'SketchfabTools') { "OK  SketchfabTools registered" } else { Write-Host "WARN: SketchfabTools not registered - restart the editor after install.ps1" -ForegroundColor Yellow }
 if ($tl.result.tools.name -contains 'execute_python_code') {
   $code = "import unreal`nw = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world()`na = unreal.get_editor_subsystem(unreal.EditorActorSubsystem).get_all_level_actors()`nprint('level=' + w.get_name() + ' actors=' + str(len(a)))"
   $pc = Invoke-Mcp @{ jsonrpc = '2.0'; id = 4; method = 'tools/call'; params = @{ name = 'execute_python_code'; arguments = @{ code = $code; auto_save = $false } } }

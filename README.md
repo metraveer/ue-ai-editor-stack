@@ -12,7 +12,7 @@ After installing: open any project → start Claude Code in its folder → ask _
 
 | Component | Where | Why |
 |---|---|---|
-| **AIEditorStack** (this repo) | `<UE>\Engine\Plugins\Marketplace\AIEditorStack` | A code-free plugin descriptor with `EnabledByDefault: true`. It turns on Unreal MCP, Epic's AI toolsets and VibeUE in every project, **editor only** (`TargetAllowList: Editor`), so nothing ends up in packaged games. Untick it in *Edit → Plugins* to opt a project out |
+| **AIEditorStack** (this repo) | `<UE>\Engine\Plugins\Marketplace\AIEditorStack` | An editor-only plugin with `EnabledByDefault: true` (no C++, nothing to compile). It turns on Unreal MCP, Epic's AI toolsets and VibeUE in every project (`TargetAllowList: Editor`, so nothing ends up in packaged games) and adds its own Python toolsets: [`SketchfabTools`](#sketchfab-models-sketchfabtools). Untick it in *Edit → Plugins* to opt a project out |
 | **VibeUE** (third-party, MIT) | `<UE>\Engine\Plugins\Marketplace\VibeUE` | Built from source for your exact engine version (1–5 min) |
 | MCP server auto-start | `%LOCALAPPDATA%\Unreal Engine\Engine\Config\UserEditorPerProjectUserSettings.ini` | User-level config layer: the server starts with the editor on `127.0.0.1:8000/mcp` in every project and engine version |
 | Claude Code wiring | `~/.claude.json`, `~/.claude/settings.json`, `~/.claude/CLAUDE.md` | User-scope MCP server `unreal-mcp`, Epic's official plugin `unreal-engine-skills-for-claude-code`, and a marked block of Unreal rules for the agent (only applies inside folders with a `.uproject`) |
@@ -38,6 +38,29 @@ The script is idempotent: re-run it any time (that also updates VibeUE to its la
 Options: `-SkipVibeUE`, `-SkipClaude`, `-VibeUEBranch <branch>`, `-Port <n>`.
 
 If a newer engine lacks a toolset from the list, the installer drops it and tells you (a missing dependency would stop the editor from starting). New Epic toolsets go into `AIEditorStack/AIEditorStack.uplugin`. Hotfix updates (5.8.x → 5.8.y) need nothing.
+
+## Sketchfab models (SketchfabTools)
+
+A Python toolset registered in Unreal MCP next to Epic's own (`ai_editor_stack.toolsets.sketchfab.SketchfabTools`):
+
+| Tool | What it does |
+|---|---|
+| `search` | Downloadable models by keywords. Hides NonCommercial / NoDerivs / Editorial licenses by default; filters by license, triangle count, animation; sorts by relevance, likes, views or date |
+| `get_model` | Details and full license terms |
+| `import_model` | Downloads the GLB (or zipped glTF) with a cancellable progress dialog, imports it via Interchange into `/Game/Sketchfab/<Model>_<id>`, tags the assets with `Sketchfab.*` metadata and appends a credit line to `<Project>/Credits/Sketchfab.md`. Restricted licenses require explicit consent (`allow_restricted_license`) |
+| `get_account` | Checks the configured token |
+
+Searching needs nothing. Downloading needs the API token of a free Sketchfab account (<https://sketchfab.com/settings/password> → *API Token*):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\set_sketchfab_token.ps1
+```
+
+The input is hidden, the token is verified against Sketchfab and stored only in `%LOCALAPPDATA%\ue-ai-editor-stack\sketchfab_token.txt` (or set `SKETCHFAB_API_TOKEN`). No editor restart needed.
+
+Most free models are Creative Commons: **CC BY** requires crediting the author, **NC** forbids commercial use, **ND** forbids distributing modified versions. Keep `Credits/Sketchfab.md` with your project. For Fab / Quixel assets use VibeUE's `FabService` (owned-library import works with your Epic login).
+
+Tests: `AI.Toolsets.AIEditorStack` in the Session Frontend, or via `AutomationTestToolset`.
 
 ## Deliberately left out
 
