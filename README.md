@@ -63,6 +63,30 @@ Searching needs nothing. Downloading needs the API token of a free Sketchfab acc
 
 The input is hidden (*Show* reveals it). *Save* verifies the token against Sketchfab (`GET /v3/me`), shows the account name or what went wrong, and stores the token only in `%LOCALAPPDATA%\ue-ai-editor-stack\sketchfab_token.txt`; *Remove token* deletes it. The `SKETCHFAB_API_TOKEN` environment variable, if set, takes precedence. No editor restart needed. The window is `AIEditorStack/Content/Python/ai_editor_stack/sketchfab_token_dialog.ps1` (WinForms, runs in its own process so the editor stays responsive; Russian UI on Russian Windows).
 
+### First run, step by step
+
+1. Open your project in Unreal Editor, start Claude Code in the project folder and check that `/mcp` shows `unreal-mcp: connected`.
+2. Ask for a model in plain words, for example:
+   > Find a wooden chair on Sketchfab, CC0 license, under 10,000 triangles
+
+   Claude lists the matches with author, license, triangle count, GLB size and the sketchfab.com link (open it to look at the model in 3D).
+3. Pick one:
+   > Import the second one into /Game/Props
+
+   The first time there is no token yet, so Claude opens the token window and asks you to fill it in. Get the token at <https://sketchfab.com/settings/password> → *API Token* (free account), paste it, press *Save*, wait for your account name and tell Claude "done". Claude checks the token with `get_account` and carries on. Paste the token only into the window, never into the chat.
+4. The editor shows a download progress dialog (you can cancel it). The assets land in `/Game/Props/<Model>_<id>` with `Sketchfab.*` metadata, and the credit line goes to `<Project>/Credits/Sketchfab.md`.
+
+More requests that work:
+
+| You say | What happens |
+|---|---|
+| "Show more options" | Next page of the same search |
+| "Find an animated robot for a commercial game, under 50k triangles, most liked first" | `search` with `animated_only`, `max_face_count` and `sort=likes` |
+| "Show the full license terms of this model" | `get_model` |
+| "Non-commercial is fine, it's a study project - search again" | Search including NC / ND licenses; before importing such a model Claude shows the terms and waits for your explicit OK |
+| "Which Sketchfab account is connected?" | `get_account` |
+| "Open the Sketchfab token window, I want to change the token" | `open_token_dialog` |
+
 Most free models are Creative Commons: **CC BY** requires crediting the author, **NC** forbids commercial use, **ND** forbids distributing modified versions. Keep `Credits/Sketchfab.md` with your project. For Fab / Quixel assets use VibeUE's `FabService` (owned-library import works with your Epic login).
 
 Tests: `AI.Toolsets.AIEditorStack` in the Session Frontend, or via `AutomationTestToolset`.
@@ -89,6 +113,7 @@ Tests: `AI.Toolsets.AIEditorStack` in the Session Frontend, or via `AutomationTe
 2. Remove the `ModelContextProtocolSettings` section from the INI above.
 3. `claude mcp remove unreal-mcp -s user` and `claude plugin uninstall unreal-engine-skills-for-claude-code@claude-plugins-official`.
 4. Remove the `ue-ai-editor-stack` block from `~/.claude/CLAUDE.md`.
+5. Delete `%LOCALAPPDATA%\ue-ai-editor-stack`: it holds the Sketchfab token (`sketchfab_token.txt`) and the VibeUE source and build cache. To remove only the token, use *Remove token* in the token window or `.\tools\set_sketchfab_token.ps1 -Remove`. Imported models and `Credits/Sketchfab.md` stay in your projects.
 
 ## Credits
 
