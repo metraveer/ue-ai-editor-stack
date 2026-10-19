@@ -55,6 +55,8 @@ class SketchfabImportResult(unreal.StructBase):
     imported_assets = unreal.uproperty(unreal.Array(str), meta={'ToolTip': 'Object paths of the imported assets'})
     attribution = unreal.uproperty(str, meta={'ToolTip': 'Credit line required by the license'})
     credits_file = unreal.uproperty(str, meta={'ToolTip': 'Absolute path of the project credits file'})
+    warnings = unreal.uproperty(unreal.Array(str), meta={
+        'ToolTip': 'Problems found after the import: empty meshes that were deleted, unlit materials, ...'})
 
 
 @unreal.ustruct()
@@ -125,7 +127,7 @@ class SketchfabTools(unreal.ToolsetDefinition):
         """
         token, _ = api.get_token()
         if not token:
-            raise RuntimeError(api.NO_TOKEN_MESSAGE)
+            raise RuntimeError(api.no_token_message())
         if not destination_folder.startswith('/Game'):
             raise ValueError('destination_folder must be a /Game/... content path.')
         details = SketchfabTools._details(uid)
@@ -155,6 +157,7 @@ class SketchfabTools(unreal.ToolsetDefinition):
 
         destination = f'{destination_folder.rstrip("/")}/{safe}_{model.uid[:6]}'
         imported = SketchfabTools._import(source, destination)
+        imported, warnings = SketchfabTools._inspect(imported)
         SketchfabTools._tag(imported, model)
 
         result = SketchfabImportResult()
@@ -162,6 +165,7 @@ class SketchfabTools(unreal.ToolsetDefinition):
         result.name = model.name
         result.destination_path = destination
         result.imported_assets = imported
+        result.warnings = warnings
         result.attribution = (
             f'"{model.name}" ({model.url}) by {model.author} ({model.author_url}) is licensed under '
             f'{model.license_label} ({details.license_url or "see model page"}).')
@@ -181,7 +185,7 @@ class SketchfabTools(unreal.ToolsetDefinition):
         """
         token, source = api.get_token()
         if not token:
-            raise RuntimeError(api.NO_TOKEN_MESSAGE)
+            raise RuntimeError(api.no_token_message())
         me = api.request_json('/me', token=token)
         account = SketchfabAccount()
         account.username = me.get('username', '')
@@ -290,6 +294,29 @@ class SketchfabTools(unreal.ToolsetDefinition):
         if not paths:
             raise RuntimeError(f'Interchange imported nothing from {source}; see the Output Log.')
         return paths
+
+    @staticmethod
+    def _inspect(paths):
+        """Drops static meshes without geometry (some scans import an empty node mesh) and flags unlit materials
+        (glTF KHR_materials_unlit), which ignore scene lights. Returns (remaining paths, warnings)."""
+        keep, warnings = [], []
+        for path in paths:
+            asset = unreal.EditorAssetLibrary.load_asset(path)
+            if isinstance(asset, unreal.StaticMesh) and asset.get_num_vertices(0) == 0:
+                name = asset.get_name()
+                if unreal.EditorAssetLibrary.delete_asset(path.split('.')[0]):
+                    warnings.append(f'Deleted the empty static mesh {name}: the file has no geometry for it.')
+                    continue
+                warnings.append(f'Static mesh {name} has no geometry.')
+            if isinstance(asset, unreal.MaterialInstance):
+                parent = asset.get_editor_property('parent')
+                if parent and 'unlit' in parent.get_name().lower():
+                    warnings.append(
+                        f'Material {asset.get_name()} is unlit (glTF KHR_materials_unlit): it ignores scene lights and '
+                        'shows its texture at full brightness. For a model that must react to light, make a child of '
+                        'the lit glTF material M_GLTF with the same BaseColorTexture and assign that.')
+            keep.append(path)
+        return keep, warnings
 
     @staticmethod
     def _tag(paths, model):

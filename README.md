@@ -14,7 +14,7 @@ After installing: open any project → start Claude Code in its folder → ask _
 |---|---|---|
 | **AIEditorStack** (this repo) | `<UE>\Engine\Plugins\Marketplace\AIEditorStack` | An editor-only plugin with `EnabledByDefault: true` (no C++, nothing to compile). It turns on Unreal MCP, Epic's AI toolsets and VibeUE in every project (`TargetAllowList: Editor`, so nothing ends up in packaged games) and adds its own Python toolsets: [`SketchfabTools`](#sketchfab-models-sketchfabtools), with a *Tools → AI Editor Stack* menu. Untick it in *Edit → Plugins* to opt a project out |
 | **VibeUE** (third-party, MIT) | `<UE>\Engine\Plugins\Marketplace\VibeUE` | Built from source for your exact engine version (1–5 min) |
-| MCP server auto-start | `%LOCALAPPDATA%\Unreal Engine\Engine\Config\UserEditorPerProjectUserSettings.ini` | User-level config layer: the server starts with the editor on `127.0.0.1:8000/mcp` in every project and engine version |
+| MCP server auto-start | `%LOCALAPPDATA%\Unreal Engine\Engine\Config\UserEditorPerProjectUserSettings.ini` + the plugin's MCP guard | User-level config layer: the server starts with the editor on `127.0.0.1:8000/mcp` in every project and engine version. If it did not (setting not visible, port busy), `AIEditorStack` starts it a few seconds later or takes the port over once the other editor closes |
 | Claude Code wiring | `~/.claude.json`, `~/.claude/settings.json`, `~/.claude/CLAUDE.md` | User-scope MCP server `unreal-mcp`, Epic's official plugin `unreal-engine-skills-for-claude-code`, and a marked block of Unreal rules for the agent (only applies inside folders with a `.uproject`) |
 
 Result on UE 5.8.3: **~90 toolsets** behind Unreal MCP's tool search (`list_toolsets` / `describe_toolset` / `call_tool`) plus VibeUE's direct tools (`execute_python_code`, `capture_image`, `discover_python_*`, …).
@@ -61,7 +61,7 @@ Searching needs nothing. Downloading needs the API token of a free Sketchfab acc
   ```
   (`-Console` for the old hidden console prompt, `-Remove` to delete the token).
 
-The input is hidden (*Show* reveals it). *Save* verifies the token against Sketchfab (`GET /v3/me`), shows the account name or what went wrong, and stores the token only in `%LOCALAPPDATA%\ue-ai-editor-stack\sketchfab_token.txt`; *Remove token* deletes it. The `SKETCHFAB_API_TOKEN` environment variable, if set, takes precedence. No editor restart needed. The window is `AIEditorStack/Content/Python/ai_editor_stack/sketchfab_token_dialog.ps1` (WinForms, runs in its own process so the editor stays responsive; Russian UI on Russian Windows).
+The input is hidden (*Show* reveals it). *Save* verifies the token against Sketchfab (`GET /v3/me`), shows the account name or what went wrong, and stores the token only in `%USERPROFILE%\.ue-ai-editor-stack\sketchfab_token.txt` (outside AppData on purpose, see *Troubleshooting*; a token saved by version 1.3 in `%LOCALAPPDATA%` is moved there automatically); *Remove token* deletes every copy. The `SKETCHFAB_API_TOKEN` environment variable, if set, takes precedence. No editor restart needed. The window is `AIEditorStack/Content/Python/ai_editor_stack/sketchfab_token_dialog.ps1` (WinForms, runs in its own process so the editor stays responsive; Russian UI on Russian Windows).
 
 ### First run, step by step
 
@@ -98,8 +98,14 @@ Tests: `AI.Toolsets.AIEditorStack` in the Session Frontend, or via `AutomationTe
 ## Daily use
 
 - Open the project in Unreal Editor → run Claude Code in the project folder (CLI or the *Code* tab of the desktop app, **local** session) → `/mcp` should show `unreal-mcp: connected`.
-- Self-test without an AI client (editor open): `.\tools\mcp_check.ps1`
-- Only **one** editor instance can own port 8000 at a time.
+- Self-test without an AI client (editor open): `.\tools\mcp_check.ps1` - also tells which process holds the port when nothing answers.
+- Only **one** editor instance can own port 8000 at a time. A second editor logs `AI Editor Stack: port 8000 is held by PID ...` and takes the port over when the first one closes. After the editor restarts, reconnect the client (`/mcp` in Claude Code).
+- Agents: `AIEditorStack/Docs/AGENT_NOTES.md` lists known traps (virtual-texture export breaking Python, decal sort order, VT sampler types, Niagara template loop settings, stale nDisplay previews) and `ai_editor_stack.ue_helpers` has helpers for them.
+
+## Troubleshooting
+
+- **MCP not connected although the editor is open.** Look for `AI Editor Stack:` lines in `<Project>\Saved\Logs\<Project>.log`. As a last resort type `ModelContextProtocol.StartServer 8000` in the editor console (the bare command ignores the port from Project Settings). Opt out of the guard with the environment variable `AIES_MCP_AUTOSTART=0` or `bAutoStartServer=False` in the project's `EditorPerProjectUserSettings.ini`.
+- **Settings or the Sketchfab token "vanish" when Claude's desktop app wrote them.** The Claude desktop app is an MSIX package, and Windows redirects every new file that it or a process it starts creates under `%LOCALAPPDATA%` / `%APPDATA%` into `%LOCALAPPDATA%\Packages\Claude_*\LocalCache`. An editor started from the Start menu doesn't see those files. Since 1.4 the installer writes its INI from a process outside the package, the plugin copies a redirected MCP section into the real INI at startup, and the token lives outside AppData. Editors started from Claude's shell see the redirected files, so they may behave differently from yours - start the editor yourself.
 
 ## Security notes
 
@@ -113,7 +119,7 @@ Tests: `AI.Toolsets.AIEditorStack` in the Session Frontend, or via `AutomationTe
 2. Remove the `ModelContextProtocolSettings` section from the INI above.
 3. `claude mcp remove unreal-mcp -s user` and `claude plugin uninstall unreal-engine-skills-for-claude-code@claude-plugins-official`.
 4. Remove the `ue-ai-editor-stack` block from `~/.claude/CLAUDE.md`.
-5. Delete `%LOCALAPPDATA%\ue-ai-editor-stack`: it holds the Sketchfab token (`sketchfab_token.txt`) and the VibeUE source and build cache. To remove only the token, use *Remove token* in the token window or `.\tools\set_sketchfab_token.ps1 -Remove`. Imported models and `Credits/Sketchfab.md` stay in your projects.
+5. Delete `%USERPROFILE%\.ue-ai-editor-stack` (and `%LOCALAPPDATA%\ue-ai-editor-stack` from version 1.3 or earlier): it holds the Sketchfab token (`sketchfab_token.txt`) and the VibeUE source and build cache. To remove only the token, use *Remove token* in the token window or `.\tools\set_sketchfab_token.ps1 -Remove`. Imported models and `Credits/Sketchfab.md` stay in your projects.
 
 ## Credits
 

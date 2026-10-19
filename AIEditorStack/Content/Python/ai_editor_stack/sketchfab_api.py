@@ -3,12 +3,15 @@
 import json
 import os
 import re
+import shutil
 import ssl
 import subprocess
 import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
+
+from ai_editor_stack import appdata
 
 API = 'https://api.sketchfab.com/v3'
 USER_AGENT = 'ue-ai-editor-stack (+https://github.com/metraveer/ue-ai-editor-stack)'
@@ -21,14 +24,35 @@ TOKEN_HELP = (
     'token there (https://sketchfab.com/settings/password -> API Token) - never to send it in the chat - and then '
     'call get_account to confirm. In the editor the same window is under Tools > AI Editor Stack > Sketchfab token. '
     f'If the {TOKEN_ENV} environment variable is set, it takes precedence over the saved token.')
-NO_TOKEN_MESSAGE = 'No Sketchfab API token on this PC. ' + TOKEN_HELP
+TOKEN_FILE_NAME = 'sketchfab_token.txt'
 
 _license_slugs: dict = {}
 
 
 def token_file() -> str:
-    base = os.environ.get('LOCALAPPDATA') or os.path.expanduser('~')
-    return os.path.join(base, 'ue-ai-editor-stack', 'sketchfab_token.txt')
+    """Where the token is saved: %USERPROFILE%\\.ue-ai-editor-stack, outside AppData, so a token saved from a
+    packaged app (the Claude desktop app and its shell) is visible to an editor started from the Start menu."""
+    return os.path.join(appdata.state_dir(), TOKEN_FILE_NAME)
+
+
+def legacy_token_files() -> list:
+    """Older or redirected copies: %LOCALAPPDATA%\\ue-ai-editor-stack (up to 1.3) and that path inside the private
+    AppData store of MSIX apps, where a window started from a packaged app actually wrote it."""
+    legacy = os.path.join(appdata.legacy_state_dir(), TOKEN_FILE_NAME)
+    redirected = appdata.redirected_copies(os.path.join(appdata.LEGACY_DIR_NAME, TOKEN_FILE_NAME))
+    return [legacy] + [p for p in redirected if os.path.normcase(p) != os.path.normcase(legacy)]
+
+
+def no_token_message() -> str:
+    return (f'No Sketchfab API token on this PC (looked for the {TOKEN_ENV} environment variable and '
+            f'{token_file()}). ' + TOKEN_HELP)
+
+
+def __getattr__(name):
+    # NO_TOKEN_MESSAGE stays importable for older callers; it now lists the searched path
+    if name == 'NO_TOKEN_MESSAGE':
+        return no_token_message()
+    raise AttributeError(name)
 
 
 def open_token_dialog() -> subprocess.Popen:
@@ -45,18 +69,45 @@ def open_token_dialog() -> subprocess.Popen:
         creationflags=subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP)
 
 
+def _read_token(path: str) -> str:
+    try:
+        with open(path, encoding='utf-8-sig') as f:
+            return f.read().strip()
+    except OSError:
+        return ''
+
+
 def get_token() -> tuple:
-    """Returns (token, source); ('', '') when none is configured. Source never contains the token."""
+    """Returns (token, source); ('', '') when none is configured. Source never contains the token.
+    A token found only in an old or MSIX-redirected location is copied to token_file() so every process sees it."""
     token = os.environ.get(TOKEN_ENV, '').strip()
     if token:
         return token, f'environment variable {TOKEN_ENV}'
     path = token_file()
-    if os.path.isfile(path):
-        with open(path, encoding='utf-8-sig') as f:
-            token = f.read().strip()
-        if token:
-            return token, path
+    token = _read_token(path)
+    if token:
+        return token, path
+    for old in legacy_token_files():
+        token = _read_token(old)
+        if not token:
+            continue
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            shutil.copyfile(old, path)
+            return token, f'{path} (moved from {old})'
+        except OSError:
+            return token, old
     return '', ''
+
+
+def remove_token() -> list:
+    """Deletes the saved token everywhere it may be, so an old copy cannot come back. Returns the deleted paths."""
+    removed = []
+    for path in [token_file()] + legacy_token_files():
+        if os.path.isfile(path):
+            os.remove(path)
+            removed.append(path)
+    return removed
 
 
 def check_uid(uid: str) -> str:

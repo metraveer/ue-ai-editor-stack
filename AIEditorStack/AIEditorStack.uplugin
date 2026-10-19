@@ -1,9 +1,9 @@
 {
 	"FileVersion": 3,
-	"Version": 4,
-	"VersionName": "1.3",
+	"Version": 5,
+	"VersionName": "1.4",
 	"FriendlyName": "AI Editor Stack (Unreal MCP + Toolsets + VibeUE)",
-	"Description": "Engine-wide switch: enables Epic's Unreal MCP server, the engine AI toolsets and VibeUE in every project, editor only (nothing is packaged into games). Adds its own Python toolsets (SketchfabTools) and a Tools > AI Editor Stack menu. To turn it off for one project, untick it in Edit > Plugins. GameFeaturesToolset and ConversationToolset are left out on purpose (they pull in the GameFeatures plugin, which raises a GameFeatureData load error in projects without Game Features) - enable them per project if needed.",
+	"Description": "Engine-wide switch: enables Epic's Unreal MCP server, the engine AI toolsets and VibeUE in every project, editor only (nothing is packaged into games). Adds its own Python toolsets (SketchfabTools), a Tools > AI Editor Stack menu and an MCP guard that starts the server when auto-start did not, or takes the port over once another editor frees it. To turn it off for one project, untick it in Edit > Plugins. GameFeaturesToolset and ConversationToolset are left out on purpose (they pull in the GameFeatures plugin, which raises a GameFeatureData load error in projects without Game Features) - enable them per project if needed.",
 	"Category": "Editor",
 	"CreatedBy": "Metraveer",
 	"CreatedByURL": "https://github.com/metraveer/ue-ai-editor-stack",

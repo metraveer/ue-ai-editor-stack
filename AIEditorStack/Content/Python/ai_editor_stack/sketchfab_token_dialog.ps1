@@ -3,17 +3,26 @@
   Window for entering the Sketchfab API token of the SketchfabTools toolset (UE AI Editor Stack).
 .DESCRIPTION
   Checks the token with GET https://api.sketchfab.com/v3/me and saves it (UTF-8, no BOM) to the file that
-  ai_editor_stack.sketchfab_api.get_token() reads. Opened by the editor menu Tools > AI Editor Stack >
-  Sketchfab token..., by SketchfabTools.open_token_dialog and by tools\set_sketchfab_token.ps1.
+  ai_editor_stack.sketchfab_api.get_token() reads: %USERPROFILE%\.ue-ai-editor-stack\sketchfab_token.txt.
+  That folder is outside AppData on purpose: Windows redirects AppData writes of packaged (MSIX) apps such as the
+  Claude desktop app, so a token saved there from Claude's shell would be invisible to the editor. Older copies
+  (%LOCALAPPDATA%\ue-ai-editor-stack and its MSIX-redirected twins) count as saved and are removed on Save/Remove.
+  Opened by the editor menu Tools > AI Editor Stack > Sketchfab token..., by SketchfabTools.open_token_dialog
+  and by tools\set_sketchfab_token.ps1.
   Only one window is open at a time. Russian UI when the Windows display language or regional format is Russian.
   Exit code: 0 = token saved, 2 = token removed, 1 = closed without changes.
   Keep this file UTF-8 with BOM: Windows PowerShell 5.1 reads BOM-less scripts in the ANSI code page.
 .EXAMPLE
   powershell -NoProfile -STA -ExecutionPolicy Bypass -File .\sketchfab_token_dialog.ps1
 #>
-param([string]$TokenFile = (Join-Path $env:LOCALAPPDATA 'ue-ai-editor-stack\sketchfab_token.txt'))
+param([string]$TokenFile = (Join-Path $env:USERPROFILE '.ue-ai-editor-stack\sketchfab_token.txt'))
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+
+# Copies from version 1.3 and earlier, including the ones Windows redirected into an MSIX app's private AppData
+$LegacyFiles = @(Join-Path $env:LOCALAPPDATA 'ue-ai-editor-stack\sketchfab_token.txt')
+$LegacyFiles += @(Get-ChildItem -Path (Join-Path $env:LOCALAPPDATA 'Packages\*\LocalCache\Local\ue-ai-editor-stack\sketchfab_token.txt') -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+$LegacyFiles = @($LegacyFiles | Where-Object { $_ -and ($_ -ne $TokenFile) })
 
 if ([Threading.Thread]::CurrentThread.GetApartmentState() -ne 'STA') {
   # WinForms needs a single-threaded apartment
@@ -104,7 +113,16 @@ if ($protocols -ne 0 -and -not ($protocols -band [Net.SecurityProtocolType]::Tls
 $script:Result = 'none'
 $script:Account = ''
 
-function Test-SavedToken { (Test-Path -LiteralPath $TokenFile) -and ([IO.File]::ReadAllText($TokenFile).Trim() -ne '') }
+function Test-SavedToken {
+  foreach ($f in @($TokenFile) + $LegacyFiles) {
+    if ((Test-Path -LiteralPath $f) -and ([IO.File]::ReadAllText($f).Trim() -ne '')) { return $true }
+  }
+  $false
+}
+
+function Remove-LegacyTokens {
+  foreach ($f in $LegacyFiles) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
+}
 
 function Add-Control([string]$Type, [int]$X, [int]$Y, [int]$W = 0, [int]$H = 0) {
   $c = New-Object "Windows.Forms.$Type"
@@ -217,6 +235,7 @@ $save.Add_Click({
   try {
     New-Item -ItemType Directory -Force (Split-Path -Parent $TokenFile) | Out-Null
     [IO.File]::WriteAllText($TokenFile, $token, (New-Object Text.UTF8Encoding($false)))
+    Remove-LegacyTokens
   } catch {
     Set-State ($T.SaveError -f $_.Exception.Message) 'error'
     return
@@ -236,7 +255,10 @@ $save.Add_Click({
 $remove.Add_Click({
   $answer = [Windows.Forms.MessageBox]::Show($form, $T.Confirm, $T.Title, 'YesNo', 'Question', 'Button2')
   if ($answer -ne 'Yes') { return }
-  try { Remove-Item -LiteralPath $TokenFile -Force -ErrorAction Stop } catch { Set-State $_.Exception.Message 'error'; return }
+  try {
+    if (Test-Path -LiteralPath $TokenFile) { Remove-Item -LiteralPath $TokenFile -Force -ErrorAction Stop }
+    Remove-LegacyTokens
+  } catch { Set-State $_.Exception.Message 'error'; return }
   $script:Result = 'removed'
   $remove.Enabled = $false
   $cancel.Text = $T.Close

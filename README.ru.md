@@ -14,7 +14,7 @@
 |---|---|---|
 | **AIEditorStack** (этот репозиторий) | `<UE>\Engine\Plugins\Marketplace\AIEditorStack` | Плагин только для редактора (`EnabledByDefault`, без C++, ничего не компилируется). Включает во всех проектах Unreal MCP, тулсеты Epic и VibeUE (в собранные игры ничего не попадает) и добавляет свои Python-тулсеты: [`SketchfabTools`](#модели-sketchfab-sketchfabtools), с меню *Tools → AI Editor Stack*. Для отдельного проекта отключается галочкой в *Edit → Plugins* |
 | **VibeUE** (сторонний, MIT) | `<UE>\Engine\Plugins\Marketplace\VibeUE` | Собирается из исходников под твою версию движка (1–5 мин) |
-| Автозапуск MCP-сервера | `%LOCALAPPDATA%\Unreal Engine\Engine\Config\UserEditorPerProjectUserSettings.ini` | Пользовательский слой конфигов: сервер `127.0.0.1:8000/mcp` стартует с редактором в любом проекте и любой версии UE |
+| Автозапуск MCP-сервера | `%LOCALAPPDATA%\Unreal Engine\Engine\Config\UserEditorPerProjectUserSettings.ini` + защита MCP в плагине | Пользовательский слой конфигов: сервер `127.0.0.1:8000/mcp` стартует с редактором в любом проекте и любой версии UE. Если не стартовал (настройка не видна, порт занят), `AIEditorStack` запускает его сам через несколько секунд или забирает порт, когда другой редактор закроется |
 | Claude Code | `~/.claude.json`, `~/.claude/settings.json`, `~/.claude/CLAUDE.md` | MCP-сервер `unreal-mcp` (user scope), официальный плагин Epic `unreal-engine-skills-for-claude-code`, блок правил для агента (действует только в папках с `.uproject`) |
 
 ## Требования
@@ -57,7 +57,7 @@ Python-тулсет, зарегистрированный в Unreal MCP рядо
   ```
   (`-Console` — старый скрытый ввод в консоли, `-Remove` — удалить токен).
 
-Ввод скрыт (галочка *Показать* его открывает). *Сохранить* проверяет токен на Sketchfab (`GET /v3/me`), показывает имя аккаунта или понятную ошибку и хранит токен только в `%LOCALAPPDATA%\ue-ai-editor-stack\sketchfab_token.txt`; *Удалить токен* стирает его. Переменная окружения `SKETCHFAB_API_TOKEN`, если задана, важнее сохранённого токена. Перезапуск редактора не нужен. Окно — `AIEditorStack/Content/Python/ai_editor_stack/sketchfab_token_dialog.ps1` (WinForms, отдельный процесс, редактор не блокируется; на русской Windows интерфейс на русском).
+Ввод скрыт (галочка *Показать* его открывает). *Сохранить* проверяет токен на Sketchfab (`GET /v3/me`), показывает имя аккаунта или понятную ошибку и хранит токен только в `%USERPROFILE%\.ue-ai-editor-stack\sketchfab_token.txt` (специально вне AppData, см. *Если что-то не работает*; токен версии 1.3 из `%LOCALAPPDATA%` переносится туда сам); *Удалить токен* стирает все копии. Переменная окружения `SKETCHFAB_API_TOKEN`, если задана, важнее сохранённого токена. Перезапуск редактора не нужен. Окно — `AIEditorStack/Content/Python/ai_editor_stack/sketchfab_token_dialog.ps1` (WinForms, отдельный процесс, редактор не блокируется; на русской Windows интерфейс на русском).
 
 ### Первый запуск по шагам
 
@@ -92,8 +92,14 @@ Python-тулсет, зарегистрированный в Unreal MCP рядо
 ## Повседневное
 
 - Открыть проект в UE → Claude Code в папке проекта (CLI или вкладка *Code* десктопного приложения, **локальная** сессия) → `/mcp` → `unreal-mcp: connected`.
-- Проверка без AI-клиента (редактор открыт): `.\tools\mcp_check.ps1`
-- Порт 8000 занимает только **один** открытый редактор.
+- Проверка без AI-клиента (редактор открыт): `.\tools\mcp_check.ps1` — если сервер не отвечает, покажет, какой процесс держит порт.
+- Порт 8000 занимает только **один** открытый редактор. Второй пишет в лог `AI Editor Stack: port 8000 is held by PID ...` и забирает порт, когда первый закроется. После перезапуска редактора переподключи клиент (`/mcp` в Claude Code).
+- Для агентов: `AIEditorStack/Docs/AGENT_NOTES.md` — известные ловушки (экспорт VT-текстур ломает Python, порядок декалей, типы сэмплеров VT, настройки цикла в шаблонах Niagara, устаревшее превью nDisplay), хелперы — в `ai_editor_stack.ue_helpers`.
+
+## Если что-то не работает
+
+- **MCP не подключается, хотя редактор открыт.** Ищи строки `AI Editor Stack:` в `<Проект>\Saved\Logs\<Проект>.log`. Крайний вариант — набрать в консоли редактора `ModelContextProtocol.StartServer 8000` (без номера порта команда берёт порт по умолчанию, а не из настроек). Отключить защиту: переменная окружения `AIES_MCP_AUTOSTART=0` или `bAutoStartServer=False` в `EditorPerProjectUserSettings.ini` проекта.
+- **Настройки или токен Sketchfab «пропадают», если их записал Claude.** Десктопное приложение Claude — MSIX-пакет: всё новое, что оно или запущенные из него процессы создают в `%LOCALAPPDATA%` / `%APPDATA%`, Windows складывает в `%LOCALAPPDATA%\Packages\Claude_*\LocalCache`. Редактор, запущенный из меню Пуск, этих файлов не видит. С версии 1.4 установщик пишет INI процессом вне пакета, плагин при старте переносит такую секцию MCP в настоящий INI, а токен хранится вне AppData. Редактор, запущенный из оболочки Claude, видит перенаправленные файлы и может вести себя иначе — запускай редактор сам.
 
 ## Безопасность
 
@@ -106,6 +112,6 @@ Python-тулсет, зарегистрированный в Unreal MCP рядо
 2. Удалить секцию `ModelContextProtocolSettings` из INI выше.
 3. `claude mcp remove unreal-mcp -s user` и `claude plugin uninstall unreal-engine-skills-for-claude-code@claude-plugins-official`.
 4. Убрать блок `ue-ai-editor-stack` из `~/.claude/CLAUDE.md`.
-5. Удалить папку `%LOCALAPPDATA%\ue-ai-editor-stack`: в ней токен Sketchfab (`sketchfab_token.txt`), а также исходники и сборка VibeUE. Чтобы убрать только токен, нажми *Удалить токен* в окне токена или запусти `.\tools\set_sketchfab_token.ps1 -Remove`. Импортированные модели и `Credits/Sketchfab.md` остаются в проектах.
+5. Удалить папку `%USERPROFILE%\.ue-ai-editor-stack` (и `%LOCALAPPDATA%\ue-ai-editor-stack` от версии 1.3 и старше): в ней токен Sketchfab (`sketchfab_token.txt`), а также исходники и сборка VibeUE. Чтобы убрать только токен, нажми *Удалить токен* в окне токена или запусти `.\tools\set_sketchfab_token.ps1 -Remove`. Импортированные модели и `Credits/Sketchfab.md` остаются в проектах.
 
 Проект не связан с Epic Games или Anthropic. Лицензия MIT.

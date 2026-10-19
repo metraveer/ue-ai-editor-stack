@@ -5,7 +5,8 @@
   1) Builds VibeUE from GitHub for the chosen engine and installs it to Engine\Plugins\Marketplace\VibeUE
   2) Installs AIEditorStack - an engine-wide, code-free switch that enables Unreal MCP, the engine AI toolsets
      and VibeUE in every project (editor only; nothing is packaged into games)
-  3) Turns on MCP server auto-start for all projects (per-user INI)
+  3) Turns on MCP server auto-start for all projects (per-user INI; written from outside the package when this
+     script runs inside an MSIX app such as the Claude desktop app, whose AppData writes Windows redirects)
   4) Configures Claude Code: user-scope MCP server "unreal-mcp", Epic's plugin, managed block in ~/.claude/CLAUDE.md
 .EXAMPLE
   .\install.ps1                                                   # newest UE found in the Epic Games Launcher
@@ -33,6 +34,68 @@ function Native([scriptblock]$Cmd) {
   try { & $Cmd 2>&1 | ForEach-Object { "    $_" } | Out-Host; return $LASTEXITCODE } finally { $ErrorActionPreference = $old }
 }
 
+# Per-user state of the stack (VibeUE build cache, Sketchfab token) lives outside AppData, see Get-AppDataRedirect
+$StateDir = Join-Path $env:USERPROFILE '.ue-ai-editor-stack'
+$script:Redirect = $null
+
+function Get-AppDataRedirect {
+  # '' if this script writes to the real %LOCALAPPDATA%, else the folder its new files there really land in.
+  # Run from the Claude desktop app (an MSIX package), Windows redirects every NEW file under %LOCALAPPDATA% /
+  # %APPDATA% into %LOCALAPPDATA%\Packages\<app>\LocalCache, where an editor started from the Start menu never sees
+  # it. The app's child processes report no package identity, so this is probed with a temporary file instead.
+  if ($null -ne $script:Redirect) { return $script:Redirect }
+  $name = ".aies-redirect-probe-$PID-" + [guid]::NewGuid().ToString('N').Substring(0, 8)
+  $probe = Join-Path $env:LOCALAPPDATA $name
+  $script:Redirect = ''
+  try {
+    [IO.File]::WriteAllText($probe, 'probe')
+    $twin = Get-ChildItem (Join-Path $env:LOCALAPPDATA "Packages\*\LocalCache\Local\$name") -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($twin) { $script:Redirect = $twin.DirectoryName }
+  } catch { } finally { Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue }
+  $script:Redirect
+}
+
+function Get-RedirectedCopy([string]$Path) {
+  $root = Get-AppDataRedirect
+  if (-not $root) { return '' }
+  Join-Path $root $Path.Substring($env:LOCALAPPDATA.Length).TrimStart('\')
+}
+
+function Write-UserAppDataFile([string]$Path, [string]$Text) {
+  # Writes a file under %LOCALAPPDATA% so that every process sees it. When this script's AppData writes are
+  # redirected, the file is written by a process started through WMI (Win32_Process.Create), which is not.
+  if (-not (Get-AppDataRedirect)) {
+    New-Item -ItemType Directory -Force (Split-Path $Path) | Out-Null
+    [IO.File]::WriteAllText($Path, $Text, $Utf8)
+    return
+  }
+  New-Item -ItemType Directory -Force $StateDir | Out-Null
+  $tmp = Join-Path $StateDir ("install-" + [guid]::NewGuid().ToString('N') + '.tmp')
+  [IO.File]::WriteAllText($tmp, $Text, $Utf8)
+  try {
+    $cmd = "New-Item -ItemType Directory -Force '$(Split-Path $Path)' | Out-Null; Copy-Item -LiteralPath '$tmp' -Destination '$Path' -Force"
+    $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cmd))
+    $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
+      CommandLine = "powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand $enc" }
+    if ($r.ReturnValue -ne 0) { throw "Win32_Process.Create returned $($r.ReturnValue)" }
+    $deadline = (Get-Date).AddSeconds(30)
+    while ((Get-Process -Id $r.ProcessId -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 200 }
+  } finally { Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue }
+  # drop the redirected copy, so this script and editors started from the same app read the real file
+  $copy = Get-RedirectedCopy $Path
+  if ($copy) { Remove-Item -LiteralPath $copy -ErrorAction SilentlyContinue }
+}
+
+function Read-UserAppDataFile([string]$Path) {
+  # The real file's text ('' if none). A redirected copy would shadow it - remove that copy first.
+  $copy = Get-RedirectedCopy $Path
+  if ($copy -and (Test-Path -LiteralPath $copy)) {
+    Warn "removing the redirected copy $copy (only this app's processes could see it)"
+    Remove-Item -LiteralPath $copy -Force
+  }
+  if (Test-Path -LiteralPath $Path) { [IO.File]::ReadAllText($Path, $Utf8) } else { '' }
+}
+
 # ---------- 0. Engine ----------
 if (-not $EngineDir) {
   $dat = 'C:\ProgramData\Epic\UnrealEngineLauncher\LauncherInstalled.dat'
@@ -56,7 +119,7 @@ if (-not $SkipVibeUE) {
   Step "VibeUE: building for UE $EngineVer"
   $busy = Get-Process UnrealEditor -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($EngineDir, 'OrdinalIgnoreCase') }
   if ($busy) { throw "Close Unreal Editor $EngineVer first (its DLLs are locked), or run with -SkipVibeUE" }
-  $work = "$env:LOCALAPPDATA\ue-ai-editor-stack"
+  $work = $StateDir
   $src  = "$work\src\VibeUE"
   $pkg  = "$work\build\VibeUE-UE$EngineVer"
   $log  = "$work\build\VibeUE-UE$EngineVer.log"
@@ -106,14 +169,27 @@ Ok "Enables $(@($j.Plugins).Count) plugins -> $dstDir"
 
 # ---------- 3. MCP server auto-start ----------
 Step "MCP server auto-start for all projects"
-$iniDir = "$env:LOCALAPPDATA\Unreal Engine\Engine\Config"
-$ini = "$iniDir\UserEditorPerProjectUserSettings.ini"
-New-Item -ItemType Directory -Force $iniDir | Out-Null
+$ini = "$env:LOCALAPPDATA\Unreal Engine\Engine\Config\UserEditorPerProjectUserSettings.ini"
+$redirect = Get-AppDataRedirect
+if ($redirect) { Warn "this shell's AppData writes are redirected to $redirect - writing the INI from a process outside it, so every editor sees it" }
 $block = [IO.File]::ReadAllText("$Root\config\UserEditorPerProjectUserSettings.ini", $Utf8) -replace 'ServerPortNumber=\d+', "ServerPortNumber=$Port"
-if (Test-Path $ini) {
-  if ([IO.File]::ReadAllText($ini, $Utf8).Contains('[/Script/ModelContextProtocolEngine.ModelContextProtocolSettings]')) { Ok "already configured: $ini" }
-  else { [IO.File]::AppendAllText($ini, "`r`n$block", $Utf8); Ok "appended to $ini" }
-} else { [IO.File]::WriteAllText($ini, $block, $Utf8); Ok "created $ini" }
+$cur = Read-UserAppDataFile $ini
+if ($cur.Contains('[/Script/ModelContextProtocolEngine.ModelContextProtocolSettings]')) { Ok "already configured: $ini" }
+else {
+  $new = if ($cur.Trim()) { $cur.TrimEnd() + "`r`n`r`n" + $block } else { $block }
+  Write-UserAppDataFile $ini $new
+  if ((Read-UserAppDataFile $ini).Contains('bAutoStartServer=True')) { Ok "written: $ini" }
+  else { Warn "could not verify $ini - the AIEditorStack plugin starts the MCP server on its own anyway" }
+}
+Ok "AIEditorStack also starts the server itself if this setting is missing or the port was busy at startup"
+# Sketchfab token from 1.3 and earlier: move it out of AppData (packaged apps' copies included)
+$tokenNew = Join-Path $StateDir 'sketchfab_token.txt'
+if (-not (Test-Path $tokenNew)) {
+  $old = @(Join-Path $env:LOCALAPPDATA 'ue-ai-editor-stack\sketchfab_token.txt') +
+         @(Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Packages\*\LocalCache\Local\ue-ai-editor-stack\sketchfab_token.txt') -ErrorAction SilentlyContinue | ForEach-Object FullName) |
+         Where-Object { Test-Path $_ } | Select-Object -First 1
+  if ($old) { New-Item -ItemType Directory -Force $StateDir | Out-Null; Copy-Item $old $tokenNew; Ok "Sketchfab token moved to $tokenNew" }
+}
 
 # ---------- 4. Claude Code ----------
 if (-not $SkipClaude) {
