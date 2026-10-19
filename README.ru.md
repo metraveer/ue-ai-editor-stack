@@ -12,7 +12,7 @@
 
 | Компонент | Куда | Зачем |
 |---|---|---|
-| **AIEditorStack** (этот репозиторий) | `<UE>\Engine\Plugins\Marketplace\AIEditorStack` | Плагин только для редактора (`EnabledByDefault`, без C++, ничего не компилируется). Включает во всех проектах Unreal MCP, тулсеты Epic и VibeUE (в собранные игры ничего не попадает) и добавляет свои Python-тулсеты: [`SketchfabTools`](#модели-sketchfab-sketchfabtools). Для отдельного проекта отключается галочкой в *Edit → Plugins* |
+| **AIEditorStack** (этот репозиторий) | `<UE>\Engine\Plugins\Marketplace\AIEditorStack` | Плагин только для редактора (`EnabledByDefault`, без C++, ничего не компилируется). Включает во всех проектах Unreal MCP, тулсеты Epic и VibeUE (в собранные игры ничего не попадает) и добавляет свои Python-тулсеты: [`SketchfabTools`](#модели-sketchfab-sketchfabtools), с меню *Tools → AI Editor Stack*. Для отдельного проекта отключается галочкой в *Edit → Plugins* |
 | **VibeUE** (сторонний, MIT) | `<UE>\Engine\Plugins\Marketplace\VibeUE` | Собирается из исходников под твою версию движка (1–5 мин) |
 | Автозапуск MCP-сервера | `%LOCALAPPDATA%\Unreal Engine\Engine\Config\UserEditorPerProjectUserSettings.ini` | Пользовательский слой конфигов: сервер `127.0.0.1:8000/mcp` стартует с редактором в любом проекте и любой версии UE |
 | Claude Code | `~/.claude.json`, `~/.claude/settings.json`, `~/.claude/CLAUDE.md` | MCP-сервер `unreal-mcp` (user scope), официальный плагин Epic `unreal-engine-skills-for-claude-code`, блок правил для агента (действует только в папках с `.uproject`) |
@@ -45,14 +45,19 @@ Python-тулсет, зарегистрированный в Unreal MCP рядо
 | `get_model` | Подробности и полные условия лицензии |
 | `import_model` | Качает GLB (или glTF в zip) с прогресс-окном (можно отменить), импортирует через Interchange в `/Game/Sketchfab/<Модель>_<id>`, ставит ассетам метаданные `Sketchfab.*` и дописывает строку атрибуции в `<Проект>/Credits/Sketchfab.md`. Ограниченные лицензии только с явного согласия (`allow_restricted_license`) |
 | `get_account` | Проверка сохранённого токена |
+| `open_token_dialog` | Открывает на рабочем столе окно ввода токена (см. ниже) и сразу возвращается |
 
-Для поиска ничего не нужно. Для скачивания нужен API-токен бесплатного аккаунта Sketchfab (<https://sketchfab.com/settings/password> → *API Token*):
+Для поиска ничего не нужно. Для скачивания нужен API-токен бесплатного аккаунта Sketchfab (<https://sketchfab.com/settings/password> → *API Token*). Он вводится в маленьком окне, которое открывается любым из способов:
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\set_sketchfab_token.ps1
-```
+- в редакторе: **Tools → AI Editor Stack → Sketchfab token…**;
+- агентом: если токена нет, Claude вызывает `open_token_dialog` и просит вставить токен в окно (никогда не в чат), затем проверяет его через `get_account`;
+- из папки репозитория:
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File .\tools\set_sketchfab_token.ps1
+  ```
+  (`-Console` — старый скрытый ввод в консоли, `-Remove` — удалить токен).
 
-Ввод скрыт, токен проверяется на Sketchfab и хранится только в `%LOCALAPPDATA%\ue-ai-editor-stack\sketchfab_token.txt` (или задай переменную `SKETCHFAB_API_TOKEN`). Перезапуск редактора не нужен.
+Ввод скрыт (галочка *Показать* его открывает). *Сохранить* проверяет токен на Sketchfab (`GET /v3/me`), показывает имя аккаунта или понятную ошибку и хранит токен только в `%LOCALAPPDATA%\ue-ai-editor-stack\sketchfab_token.txt`; *Удалить токен* стирает его. Переменная окружения `SKETCHFAB_API_TOKEN`, если задана, важнее сохранённого токена. Перезапуск редактора не нужен. Окно — `AIEditorStack/Content/Python/ai_editor_stack/sketchfab_token_dialog.ps1` (WinForms, отдельный процесс, редактор не блокируется; на русской Windows интерфейс на русском).
 
 Большинство бесплатных моделей под Creative Commons: **CC BY** требует указывать автора, **NC** запрещает коммерческое использование, **ND** запрещает распространять изменённые версии. Храни `Credits/Sketchfab.md` вместе с проектом. Для ассетов Fab / Quixel используй `FabService` из VibeUE (импорт из своей библиотеки работает через вход в Epic).
 

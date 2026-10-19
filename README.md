@@ -12,7 +12,7 @@ After installing: open any project → start Claude Code in its folder → ask _
 
 | Component | Where | Why |
 |---|---|---|
-| **AIEditorStack** (this repo) | `<UE>\Engine\Plugins\Marketplace\AIEditorStack` | An editor-only plugin with `EnabledByDefault: true` (no C++, nothing to compile). It turns on Unreal MCP, Epic's AI toolsets and VibeUE in every project (`TargetAllowList: Editor`, so nothing ends up in packaged games) and adds its own Python toolsets: [`SketchfabTools`](#sketchfab-models-sketchfabtools). Untick it in *Edit → Plugins* to opt a project out |
+| **AIEditorStack** (this repo) | `<UE>\Engine\Plugins\Marketplace\AIEditorStack` | An editor-only plugin with `EnabledByDefault: true` (no C++, nothing to compile). It turns on Unreal MCP, Epic's AI toolsets and VibeUE in every project (`TargetAllowList: Editor`, so nothing ends up in packaged games) and adds its own Python toolsets: [`SketchfabTools`](#sketchfab-models-sketchfabtools), with a *Tools → AI Editor Stack* menu. Untick it in *Edit → Plugins* to opt a project out |
 | **VibeUE** (third-party, MIT) | `<UE>\Engine\Plugins\Marketplace\VibeUE` | Built from source for your exact engine version (1–5 min) |
 | MCP server auto-start | `%LOCALAPPDATA%\Unreal Engine\Engine\Config\UserEditorPerProjectUserSettings.ini` | User-level config layer: the server starts with the editor on `127.0.0.1:8000/mcp` in every project and engine version |
 | Claude Code wiring | `~/.claude.json`, `~/.claude/settings.json`, `~/.claude/CLAUDE.md` | User-scope MCP server `unreal-mcp`, Epic's official plugin `unreal-engine-skills-for-claude-code`, and a marked block of Unreal rules for the agent (only applies inside folders with a `.uproject`) |
@@ -49,14 +49,19 @@ A Python toolset registered in Unreal MCP next to Epic's own (`ai_editor_stack.t
 | `get_model` | Details and full license terms |
 | `import_model` | Downloads the GLB (or zipped glTF) with a cancellable progress dialog, imports it via Interchange into `/Game/Sketchfab/<Model>_<id>`, tags the assets with `Sketchfab.*` metadata and appends a credit line to `<Project>/Credits/Sketchfab.md`. Restricted licenses require explicit consent (`allow_restricted_license`) |
 | `get_account` | Checks the configured token |
+| `open_token_dialog` | Opens the token window on the user's desktop (see below) and returns at once |
 
-Searching needs nothing. Downloading needs the API token of a free Sketchfab account (<https://sketchfab.com/settings/password> → *API Token*):
+Searching needs nothing. Downloading needs the API token of a free Sketchfab account (<https://sketchfab.com/settings/password> → *API Token*). Enter it in a small window, opened any of these ways:
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\set_sketchfab_token.ps1
-```
+- in the editor: **Tools → AI Editor Stack → Sketchfab token…**;
+- by the agent: when there is no token, Claude calls `open_token_dialog` and asks you to paste the token into the window (never into the chat), then checks it with `get_account`;
+- from the repo folder:
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File .\tools\set_sketchfab_token.ps1
+  ```
+  (`-Console` for the old hidden console prompt, `-Remove` to delete the token).
 
-The input is hidden, the token is verified against Sketchfab and stored only in `%LOCALAPPDATA%\ue-ai-editor-stack\sketchfab_token.txt` (or set `SKETCHFAB_API_TOKEN`). No editor restart needed.
+The input is hidden (*Show* reveals it). *Save* verifies the token against Sketchfab (`GET /v3/me`), shows the account name or what went wrong, and stores the token only in `%LOCALAPPDATA%\ue-ai-editor-stack\sketchfab_token.txt`; *Remove token* deletes it. The `SKETCHFAB_API_TOKEN` environment variable, if set, takes precedence. No editor restart needed. The window is `AIEditorStack/Content/Python/ai_editor_stack/sketchfab_token_dialog.ps1` (WinForms, runs in its own process so the editor stays responsive; Russian UI on Russian Windows).
 
 Most free models are Creative Commons: **CC BY** requires crediting the author, **NC** forbids commercial use, **ND** forbids distributing modified versions. Keep `Credits/Sketchfab.md` with your project. For Fab / Quixel assets use VibeUE's `FabService` (owned-library import works with your Epic login).
 

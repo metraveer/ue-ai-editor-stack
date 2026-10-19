@@ -4,6 +4,7 @@ import json
 import os
 import re
 import ssl
+import subprocess
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -12,10 +13,15 @@ import zipfile
 API = 'https://api.sketchfab.com/v3'
 USER_AGENT = 'ue-ai-editor-stack (+https://github.com/metraveer/ue-ai-editor-stack)'
 TOKEN_ENV = 'SKETCHFAB_API_TOKEN'
-NO_TOKEN_MESSAGE = (
-    'No Sketchfab API token on this PC. Ask the user to run tools\\set_sketchfab_token.ps1 from the '
-    'ue-ai-editor-stack repo (token: https://sketchfab.com/settings/password -> API Token), '
-    f'or to set the {TOKEN_ENV} environment variable.')
+TOKEN_DIALOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sketchfab_token_dialog.ps1')
+POWERSHELL = os.path.join(os.environ.get('SystemRoot', r'C:\Windows'),
+                          'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+TOKEN_HELP = (
+    'Call SketchfabTools.open_token_dialog: it opens a window on the user\'s desktop. Ask the user to paste their '
+    'token there (https://sketchfab.com/settings/password -> API Token) - never to send it in the chat - and then '
+    'call get_account to confirm. In the editor the same window is under Tools > AI Editor Stack > Sketchfab token. '
+    f'If the {TOKEN_ENV} environment variable is set, it takes precedence over the saved token.')
+NO_TOKEN_MESSAGE = 'No Sketchfab API token on this PC. ' + TOKEN_HELP
 
 _license_slugs: dict = {}
 
@@ -23,6 +29,20 @@ _license_slugs: dict = {}
 def token_file() -> str:
     base = os.environ.get('LOCALAPPDATA') or os.path.expanduser('~')
     return os.path.join(base, 'ue-ai-editor-stack', 'sketchfab_token.txt')
+
+
+def open_token_dialog() -> subprocess.Popen:
+    """Starts the token window (sketchfab_token_dialog.ps1) in its own process and returns without waiting.
+    The window verifies the token with Sketchfab and saves it to token_file()."""
+    if os.name != 'nt':
+        raise RuntimeError(f'The token window needs Windows; set the {TOKEN_ENV} environment variable instead.')
+    if not os.path.isfile(TOKEN_DIALOG):
+        raise RuntimeError(f'Token window script not found: {TOKEN_DIALOG}. Re-run install.ps1.')
+    return subprocess.Popen(
+        [POWERSHELL, '-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-File', TOKEN_DIALOG,
+         '-TokenFile', token_file()],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True,
+        creationflags=subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP)
 
 
 def get_token() -> tuple:
@@ -76,7 +96,7 @@ def request_json(path_or_url: str, params: dict = None, token: str = '', timeout
     except urllib.error.HTTPError as e:
         detail = e.read().decode('utf-8', 'replace')[:300]
         if e.code == 401:
-            raise RuntimeError('Sketchfab rejected the API token (HTTP 401). ' + NO_TOKEN_MESSAGE) from None
+            raise RuntimeError('Sketchfab rejected the API token (HTTP 401). ' + TOKEN_HELP) from None
         if e.code == 404:
             raise ValueError('Not found on Sketchfab (HTTP 404). Check the model uid.') from None
         if e.code == 429:

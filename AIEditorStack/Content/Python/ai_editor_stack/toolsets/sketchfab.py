@@ -67,7 +67,8 @@ class SketchfabAccount(unreal.StructBase):
 @unreal.uclass()
 class SketchfabTools(unreal.ToolsetDefinition):
     """Finds free downloadable 3D models on Sketchfab and imports them into the project as glTF via Interchange,
-    tagging the assets and recording author/license credits. Downloading needs a Sketchfab API token on this PC."""
+    tagging the assets and recording author/license credits. Downloading needs a Sketchfab API token on this PC,
+    which the user enters in a desktop window this toolset opens."""
 
     @toolset_registry.tool_call
     @staticmethod
@@ -186,6 +187,14 @@ class SketchfabTools(unreal.ToolsetDefinition):
         account.username = me.get('username', '')
         account.token_source = source
         return account
+
+    @toolset_registry.tool_call
+    @staticmethod
+    def open_token_dialog() -> None:
+        """Opens a window on the user's desktop where they paste their Sketchfab API token; the window verifies it
+        with Sketchfab and saves it on this PC, so the token never passes through the chat. Returns without waiting
+        for the user."""
+        api.open_token_dialog()
 
     # ------------------------------------------------------------------ helpers
 

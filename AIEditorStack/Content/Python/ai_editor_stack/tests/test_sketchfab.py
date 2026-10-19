@@ -1,11 +1,15 @@
 import os
+import subprocess
 import tempfile
 import unittest
 import urllib.request
 import zipfile
 from unittest import mock
 
+import unreal
+
 from toolset_registry.tests.toolset_testcase import ToolCallTestCase
+from ai_editor_stack import menu
 from ai_editor_stack import sketchfab_api as api
 from ai_editor_stack.toolsets.sketchfab import SketchfabTools
 
@@ -67,6 +71,44 @@ class SketchfabApiTest(unittest.TestCase):
             self.assertIn('other', text)
 
 
+class SketchfabTokenDialogTest(unittest.TestCase):
+    """The token window script and how it is started; the window itself is never shown."""
+
+    def test_script_has_utf8_bom(self):
+        with open(api.TOKEN_DIALOG, 'rb') as f:
+            self.assertEqual(f.read(3), b'\xef\xbb\xbf', 'Windows PowerShell 5.1 misreads the Cyrillic text without a BOM')
+
+    def test_script_parses(self):
+        check = ('$tokens = $null; $errors = $null; '
+                 '$null = [Management.Automation.Language.Parser]::ParseFile($env:AIES_DIALOG, [ref]$tokens, [ref]$errors); '
+                 '$errors | ForEach-Object { "$($_.Extent.StartLineNumber): $($_.Message)" }')
+        done = subprocess.run([api.POWERSHELL, '-NoProfile', '-NonInteractive', '-Command', check],
+                              env={**os.environ, 'AIES_DIALOG': api.TOKEN_DIALOG}, capture_output=True, text=True,
+                              timeout=60, creationflags=subprocess.CREATE_NO_WINDOW)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(done.stdout.strip(), '')
+
+    def test_open_starts_detached_window_process(self):
+        with mock.patch.object(api.subprocess, 'Popen') as popen:
+            api.open_token_dialog()
+        command = popen.call_args.args[0]
+        options = popen.call_args.kwargs
+        self.assertTrue(os.path.isfile(command[0]), command[0])
+        self.assertIn('-STA', command)
+        self.assertEqual(command[command.index('-File') + 1], api.TOKEN_DIALOG)
+        self.assertEqual(command[command.index('-TokenFile') + 1], api.token_file())
+        self.assertTrue(options['creationflags'] & subprocess.CREATE_NO_WINDOW)
+        self.assertEqual(options['stdout'], subprocess.DEVNULL)
+
+    def test_menu_is_registered(self):
+        self.assertIsNotNone(unreal.ToolMenus.get().find_menu(menu.SUB_MENU))
+
+    def test_menu_command_opens_window(self):
+        with mock.patch.object(api.subprocess, 'Popen') as popen:
+            menu.open_sketchfab_token_dialog()
+        popen.assert_called_once()
+
+
 class SketchfabToolsTest(ToolCallTestCase):
     """Tool calls; network tests are skipped when Sketchfab is unreachable."""
 
@@ -85,6 +127,21 @@ class SketchfabToolsTest(ToolCallTestCase):
     def test_import_requires_token(self):
         with mock.patch.object(api, 'get_token', return_value=('', '')), self.assertToolRaisesRuntimeError():
             SketchfabTools.import_model('0' * 32)
+
+    def test_get_account_without_token_points_to_dialog(self):
+        with mock.patch.object(api, 'get_token', return_value=('', '')), self.assertToolRaisesRuntimeError() as cm:
+            SketchfabTools.get_account()
+        self.assertIn('open_token_dialog', str(cm.exception))
+
+    def test_open_token_dialog_opens_window(self):
+        with mock.patch.object(api.subprocess, 'Popen') as popen:
+            SketchfabTools.open_token_dialog()
+        popen.assert_called_once()
+
+    def test_open_token_dialog_requires_script(self):
+        missing = os.path.join(tempfile.gettempdir(), 'no_such_sketchfab_token_dialog.ps1')
+        with mock.patch.object(api, 'TOKEN_DIALOG', missing), self.assertToolRaisesRuntimeError():
+            SketchfabTools.open_token_dialog()
 
     @unittest.skipUnless(ONLINE, 'Sketchfab unreachable')
     def test_search_returns_commercial_models(self):
