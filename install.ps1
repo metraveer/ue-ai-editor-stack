@@ -7,7 +7,8 @@
      and VibeUE in every project (editor only; nothing is packaged into games)
   3) Turns on MCP server auto-start for all projects (per-user INI; written from outside the package when this
      script runs inside an MSIX app such as the Claude desktop app, whose AppData writes Windows redirects)
-  4) Configures Claude Code: user-scope MCP server "unreal-mcp", Epic's plugin, managed block in ~/.claude/CLAUDE.md
+  4) Configures Claude Code: user-scope MCP server "unreal-mcp" (a stdio bridge to the editor that stays connected
+     while no editor runs), Epic's plugin, managed block in ~/.claude/CLAUDE.md
 .EXAMPLE
   .\install.ps1                                                   # newest UE found in the Epic Games Launcher
   .\install.ps1 -EngineDir "C:\Program Files\Epic Games\UE_5.9"
@@ -194,12 +195,33 @@ if (-not (Test-Path $tokenNew)) {
 # ---------- 4. Claude Code ----------
 if (-not $SkipClaude) {
   Step "Claude Code"
+  # "unreal-mcp" is the stdio bridge (bridge\unreal_mcp_bridge.py, run by the engine's Python), not the editor's HTTP
+  # endpoint: with direct HTTP Claude Code gives up on a session started before the editor, its Reconnect then fails
+  # in an OAuth flow, and calls silent for 300 s are aborted. The bridge stays connected and finds the editor itself.
+  $py = "$EngineDir\Engine\Binaries\ThirdParty\Python3\Win64\python.exe"
+  $bridge = Join-Path $StateDir 'unreal_mcp_bridge.py'
+  New-Item -ItemType Directory -Force $StateDir | Out-Null
+  Copy-Item "$Root\bridge\unreal_mcp_bridge.py" $bridge -Force
+  Ok "MCP bridge: $bridge"
   if (-not (Get-Command claude -ErrorAction SilentlyContinue)) { Warn "'claude' is not on PATH - skipping MCP server and plugin registration" }
   else {
     $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-    $null = claude mcp get unreal-mcp 2>&1; $has = ($LASTEXITCODE -eq 0); $ErrorActionPreference = $old
-    if ($has) { Ok "MCP server 'unreal-mcp' already registered" }
-    else { $null = Native { claude mcp add --transport http --scope user unreal-mcp "http://127.0.0.1:$Port/mcp" } }
+    $cur = (claude mcp get unreal-mcp 2>&1 | Out-String); $has = ($LASTEXITCODE -eq 0); $ErrorActionPreference = $old
+    $want = (Test-Path $py) -and $cur.Contains($bridge) -and $cur.Contains($py) -and $cur.Contains("--port $Port")
+    if ($want) { Ok "MCP server 'unreal-mcp' already registered (stdio bridge)" }
+    else {
+      if ($has) { $null = Native { claude mcp remove unreal-mcp -s user } }
+      if (Test-Path $py) { $null = Native { claude mcp add --scope user unreal-mcp -- $py -I $bridge --port $Port } }
+      else {
+        Warn "no bundled Python at $py - registering the editor's HTTP endpoint directly (reconnect with /mcp after the editor starts)"
+        $null = Native { claude mcp add --transport http --scope user unreal-mcp "http://127.0.0.1:$Port/mcp" }
+      }
+      $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+      $cur = (claude mcp get unreal-mcp 2>&1 | Out-String); $ErrorActionPreference = $old
+      if ($cur.Contains($bridge)) { Ok "MCP server 'unreal-mcp' registered: stdio bridge -> http://127.0.0.1:$Port/mcp" }
+      elseif ($cur -match 'Type:\s*http') { Ok "MCP server 'unreal-mcp' registered: http://127.0.0.1:$Port/mcp" }
+      else { Warn "could not verify the 'unreal-mcp' registration - check 'claude mcp get unreal-mcp'" }
+    }
     if ((claude plugin list 2>&1 | Out-String) -match 'unreal-engine-skills-for-claude-code') { Ok "Epic plugin already installed" }
     else {
       $null = Native { claude plugin marketplace update claude-plugins-official }
@@ -220,4 +242,5 @@ if (-not $SkipClaude) {
 
 Step "Done"
 Write-Host "    Open any project in UE $EngineVer -> Claude Code in the project folder -> /mcp -> unreal-mcp: connected"
+Write-Host "    Sessions that were already running keep the old connection: start a new one or reconnect unreal-mcp in /mcp once"
 Write-Host "    Server self-test without Claude (editor open): .\tools\mcp_check.ps1"

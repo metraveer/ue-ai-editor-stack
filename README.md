@@ -15,7 +15,7 @@ After installing: open any project → start Claude Code in its folder → ask _
 | **AIEditorStack** (this repo) | `<UE>\Engine\Plugins\Marketplace\AIEditorStack` | An editor-only plugin with `EnabledByDefault: true` (no C++, nothing to compile). It turns on Unreal MCP, Epic's AI toolsets and VibeUE in every project (`TargetAllowList: Editor`, so nothing ends up in packaged games) and adds its own Python toolsets: [`SketchfabTools`](#sketchfab-models-sketchfabtools), with a *Tools → AI Editor Stack* menu. Untick it in *Edit → Plugins* to opt a project out |
 | **VibeUE** (third-party, MIT) | `<UE>\Engine\Plugins\Marketplace\VibeUE` | Built from source for your exact engine version (1–5 min) |
 | MCP server auto-start | `%LOCALAPPDATA%\Unreal Engine\Engine\Config\UserEditorPerProjectUserSettings.ini` + the plugin's MCP guard | User-level config layer: the server starts with the editor on `127.0.0.1:8000/mcp` in every project and engine version. If it did not (setting not visible, port busy), `AIEditorStack` starts it a few seconds later or takes the port over once the other editor closes |
-| Claude Code wiring | `~/.claude.json`, `~/.claude/settings.json`, `~/.claude/CLAUDE.md` | User-scope MCP server `unreal-mcp`, Epic's official plugin `unreal-engine-skills-for-claude-code`, and a marked block of Unreal rules for the agent (only applies inside folders with a `.uproject`) |
+| Claude Code wiring | `~/.claude.json`, `~/.claude/settings.json`, `~/.claude/CLAUDE.md`, `%USERPROFILE%\.ue-ai-editor-stack\unreal_mcp_bridge.py` | User-scope MCP server `unreal-mcp` - a small stdio bridge to the editor, run by the engine's Python (see [Why a bridge](#why-a-bridge)), Epic's official plugin `unreal-engine-skills-for-claude-code`, and a marked block of Unreal rules for the agent (only applies inside folders with a `.uproject`) |
 
 Result on UE 5.8.3: **~90 toolsets** behind Unreal MCP's tool search (`list_toolsets` / `describe_toolset` / `call_tool`) plus VibeUE's direct tools (`execute_python_code`, `capture_image`, `discover_python_*`, …).
 
@@ -99,12 +99,24 @@ Tests: `AI.Toolsets.AIEditorStack` in the Session Frontend, or via `AutomationTe
 
 - Open the project in Unreal Editor → run Claude Code in the project folder (CLI or the *Code* tab of the desktop app, **local** session) → `/mcp` should show `unreal-mcp: connected`.
 - Self-test without an AI client (editor open): `.\tools\mcp_check.ps1` - also tells which process holds the port when nothing answers.
-- Only **one** editor instance can own port 8000 at a time. A second editor logs `AI Editor Stack: port 8000 is held by PID ...` and takes the port over when the first one closes. After the editor restarts, reconnect the client (`/mcp` in Claude Code).
+- Only **one** editor instance can own port 8000 at a time. A second editor logs `AI Editor Stack: port 8000 is held by PID ...` and takes the port over when the first one closes.
+- Start Claude Code and the editor in any order and restart the editor whenever you like: the bridge keeps `unreal-mcp` connected and finds the editor by itself. While no editor answers, tool calls return *Unreal Editor is not reachable* - open the project and the next call goes through.
 - Agents: `AIEditorStack/Docs/AGENT_NOTES.md` lists known traps (virtual-texture export breaking Python, decal sort order, VT sampler types, Niagara template loop settings, stale nDisplay previews) and `ai_editor_stack.ue_helpers` has helpers for them.
+
+### Why a bridge
+
+Up to 1.4 the installer pointed Claude Code straight at the editor's `http://127.0.0.1:8000/mcp`. That breaks in everyday use: a session started before the editor marks the server as failed after ~30 s of retries and never tries again, *Reconnect* in the desktop app then runs an OAuth flow the editor doesn't implement (`Dynamic Client Registration rejected (HTTP 404)`), and a call that keeps the editor busy for more than 300 s is aborted. Since 1.5 `unreal-mcp` is `bridge/unreal_mcp_bridge.py` (standard library only), which:
+
+- answers the client at once and, while no editor runs, lists the editor's tools from the last list it saw (`%USERPROFILE%\.ue-ai-editor-stack\unreal_mcp_tools_cache.json`); when the editor appears or restarts with other tools, Claude Code is told to refresh them;
+- opens the editor session lazily and reopens it after an editor restart;
+- sends a progress notification every 20 s during long calls, so Claude Code's idle timeout doesn't fire.
+
+Other MCP clients can still use `http://127.0.0.1:8000/mcp` directly. Tests (no editor needed): `"<UE>\Engine\Binaries\ThirdParty\Python3\Win64\python.exe" -I bridge\test_bridge.py`.
 
 ## Troubleshooting
 
-- **MCP not connected although the editor is open.** Look for `AI Editor Stack:` lines in `<Project>\Saved\Logs\<Project>.log`. As a last resort type `ModelContextProtocol.StartServer 8000` in the editor console (the bare command ignores the port from Project Settings). Opt out of the guard with the environment variable `AIES_MCP_AUTOSTART=0` or `bAutoStartServer=False` in the project's `EditorPerProjectUserSettings.ini`.
+- **`unreal-mcp` failed in `/mcp` (ECONNREFUSED, or *Dynamic Client Registration rejected*).** That is the direct HTTP registration from 1.4 or earlier. Re-run `.\install.ps1 -SkipVibeUE`, then start a new Claude Code session or reconnect `unreal-mcp` in `/mcp` once. `.\tools\mcp_check.ps1` shows how Claude Code is wired.
+- **Tool calls say *Unreal Editor is not reachable* although the editor is open.** Look for `AI Editor Stack:` lines in `<Project>\Saved\Logs\<Project>.log`. As a last resort type `ModelContextProtocol.StartServer 8000` in the editor console (the bare command ignores the port from Project Settings). Opt out of the guard with the environment variable `AIES_MCP_AUTOSTART=0` or `bAutoStartServer=False` in the project's `EditorPerProjectUserSettings.ini`.
 - **Settings or the Sketchfab token "vanish" when Claude's desktop app wrote them.** The Claude desktop app is an MSIX package, and Windows redirects every new file that it or a process it starts creates under `%LOCALAPPDATA%` / `%APPDATA%` into `%LOCALAPPDATA%\Packages\Claude_*\LocalCache`. An editor started from the Start menu doesn't see those files. Since 1.4 the installer writes its INI from a process outside the package, the plugin copies a redirected MCP section into the real INI at startup, and the token lives outside AppData. Editors started from Claude's shell see the redirected files, so they may behave differently from yours - start the editor yourself.
 
 ## Security notes
@@ -119,7 +131,7 @@ Tests: `AI.Toolsets.AIEditorStack` in the Session Frontend, or via `AutomationTe
 2. Remove the `ModelContextProtocolSettings` section from the INI above.
 3. `claude mcp remove unreal-mcp -s user` and `claude plugin uninstall unreal-engine-skills-for-claude-code@claude-plugins-official`.
 4. Remove the `ue-ai-editor-stack` block from `~/.claude/CLAUDE.md`.
-5. Delete `%USERPROFILE%\.ue-ai-editor-stack` (and `%LOCALAPPDATA%\ue-ai-editor-stack` from version 1.3 or earlier): it holds the Sketchfab token (`sketchfab_token.txt`) and the VibeUE source and build cache. To remove only the token, use *Remove token* in the token window or `.\tools\set_sketchfab_token.ps1 -Remove`. Imported models and `Credits/Sketchfab.md` stay in your projects.
+5. Delete `%USERPROFILE%\.ue-ai-editor-stack` (and `%LOCALAPPDATA%\ue-ai-editor-stack` from version 1.3 or earlier): it holds the MCP bridge and its tool cache, the Sketchfab token (`sketchfab_token.txt`) and the VibeUE source and build cache. To remove only the token, use *Remove token* in the token window or `.\tools\set_sketchfab_token.ps1 -Remove`. Imported models and `Credits/Sketchfab.md` stay in your projects.
 
 ## Credits
 

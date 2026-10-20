@@ -27,7 +27,12 @@ Read once per session, before the first editor action. Helpers live in `ai_edito
   PID ...` and takes the port over when it frees. Status from Python: `ai_editor_stack.mcp_guard.status()`.
 - `ModelContextProtocol.StartServer` **without a port** uses the built-in default, not Project Settings - pass the
   port. After a failed bind Epic's server still reports itself as running; only the TCP listener tells the truth.
-- After the editor (re)starts, Claude Code must reconnect: ask the user to run `/mcp` (there is no tool for it).
+- Claude Code reaches the editor through the stack's stdio bridge (`bridge/unreal_mcp_bridge.py` in the repo, installed
+  to `%USERPROFILE%\.ue-ai-editor-stack`): it stays connected across editor restarts and while no editor runs (tools
+  listed from a cache, calls answer "Unreal Editor is not reachable" - ask the user to open the project and retry), and
+  keeps long calls alive with progress notifications. Only an old direct-HTTP registration (`/mcp` shows unreal-mcp
+  failed) needs `/mcp` -> Reconnect; re-running `install.ps1 -SkipVibeUE` switches it to the bridge. Never work around
+  a missing unreal-mcp by posting JSON-RPC to the port from the shell.
 - Self-test from a terminal: `tools\mcp_check.ps1` (shows which PID serves the port, or why nothing does).
 - Don't `importlib.reload` toolset modules (`ai_editor_stack.toolsets.*`): the registered class becomes
   `Invalid Toolset Class` until the editor restarts. Reloading plain helper modules is fine.

@@ -31,8 +31,19 @@ function Show-Diagnosis {
   }
   if ($editors.Count -gt 1) { Write-Host "    Several editors are open: only one can own port $Port; the others take it over when it is free." -ForegroundColor Yellow }
 }
+function Show-ClaudeWiring {
+  # How Claude Code reaches the editor: the stack's stdio bridge (1.5+) or the editor's HTTP endpoint directly
+  if (-not (Get-Command claude -ErrorAction SilentlyContinue)) { return }
+  $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+  $reg = (claude mcp get unreal-mcp 2>&1 | Out-String); $ErrorActionPreference = $old
+  if ($reg -match 'unreal_mcp_bridge\.py') { "OK  Claude Code: unreal-mcp = stdio bridge (stays connected without an editor; new sessions pick it up)" }
+  elseif ($reg -match 'Type:\s*http') {
+    Write-Host "WARN: Claude Code connects to the editor's HTTP endpoint directly - sessions started before the editor lose unreal-mcp." -ForegroundColor Yellow
+    Write-Host "      Re-run install.ps1 -SkipVibeUE to switch to the bridge." -ForegroundColor Yellow
+  } else { Write-Host "WARN: 'unreal-mcp' is not registered in Claude Code (user scope) - run install.ps1" -ForegroundColor Yellow }
+}
 try { $init = Invoke-Mcp @{ jsonrpc = '2.0'; id = 1; method = 'initialize'; params = @{ protocolVersion = '2025-06-18'; capabilities = @{}; clientInfo = @{ name = 'mcp-check'; version = '1.0' } } } }
-catch { Write-Host "FAIL: no MCP server on $u" -ForegroundColor Red; Show-Diagnosis; exit 1 }
+catch { Write-Host "FAIL: no MCP server on $u" -ForegroundColor Red; Show-Diagnosis; Show-ClaudeWiring; exit 1 }
 "OK  server on $u (protocol $($init.result.protocolVersion))"
 $owner = Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty OwningProcess
 if ($owner) { "OK  served by PID $owner (" + (Get-Process -Id $owner -ErrorAction SilentlyContinue).MainWindowTitle + ")" }
@@ -49,3 +60,4 @@ if ($tl.result.tools.name -contains 'execute_python_code') {
   $out = (($pc.result.content | Where-Object { $_.type -eq 'text' } | ForEach-Object { $_.text }) -join ' ')
   if ($out -match '"output"\s*:\s*"([^"]*)"') { "OK  python: $($Matches[1])" } else { "??  python: $out" }
 } else { Write-Host "WARN: execute_python_code not found - VibeUE is not loaded" -ForegroundColor Yellow }
+Show-ClaudeWiring

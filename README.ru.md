@@ -15,7 +15,7 @@
 | **AIEditorStack** (этот репозиторий) | `<UE>\Engine\Plugins\Marketplace\AIEditorStack` | Плагин только для редактора (`EnabledByDefault`, без C++, ничего не компилируется). Включает во всех проектах Unreal MCP, тулсеты Epic и VibeUE (в собранные игры ничего не попадает) и добавляет свои Python-тулсеты: [`SketchfabTools`](#модели-sketchfab-sketchfabtools), с меню *Tools → AI Editor Stack*. Для отдельного проекта отключается галочкой в *Edit → Plugins* |
 | **VibeUE** (сторонний, MIT) | `<UE>\Engine\Plugins\Marketplace\VibeUE` | Собирается из исходников под твою версию движка (1–5 мин) |
 | Автозапуск MCP-сервера | `%LOCALAPPDATA%\Unreal Engine\Engine\Config\UserEditorPerProjectUserSettings.ini` + защита MCP в плагине | Пользовательский слой конфигов: сервер `127.0.0.1:8000/mcp` стартует с редактором в любом проекте и любой версии UE. Если не стартовал (настройка не видна, порт занят), `AIEditorStack` запускает его сам через несколько секунд или забирает порт, когда другой редактор закроется |
-| Claude Code | `~/.claude.json`, `~/.claude/settings.json`, `~/.claude/CLAUDE.md` | MCP-сервер `unreal-mcp` (user scope), официальный плагин Epic `unreal-engine-skills-for-claude-code`, блок правил для агента (действует только в папках с `.uproject`) |
+| Claude Code | `~/.claude.json`, `~/.claude/settings.json`, `~/.claude/CLAUDE.md`, `%USERPROFILE%\.ue-ai-editor-stack\unreal_mcp_bridge.py` | MCP-сервер `unreal-mcp` (user scope) — небольшой stdio-мост к редактору на Python из движка (см. [Зачем мост](#зачем-мост)), официальный плагин Epic `unreal-engine-skills-for-claude-code`, блок правил для агента (действует только в папках с `.uproject`) |
 
 ## Требования
 
@@ -93,12 +93,24 @@ Python-тулсет, зарегистрированный в Unreal MCP рядо
 
 - Открыть проект в UE → Claude Code в папке проекта (CLI или вкладка *Code* десктопного приложения, **локальная** сессия) → `/mcp` → `unreal-mcp: connected`.
 - Проверка без AI-клиента (редактор открыт): `.\tools\mcp_check.ps1` — если сервер не отвечает, покажет, какой процесс держит порт.
-- Порт 8000 занимает только **один** открытый редактор. Второй пишет в лог `AI Editor Stack: port 8000 is held by PID ...` и забирает порт, когда первый закроется. После перезапуска редактора переподключи клиент (`/mcp` в Claude Code).
+- Порт 8000 занимает только **один** открытый редактор. Второй пишет в лог `AI Editor Stack: port 8000 is held by PID ...` и забирает порт, когда первый закроется.
+- Claude Code и редактор можно запускать в любом порядке и перезапускать редактор когда угодно: мост держит `unreal-mcp` подключённым и сам находит редактор. Пока редактор не отвечает, вызовы инструментов возвращают *Unreal Editor is not reachable* — открой проект, и следующий вызов пройдёт.
 - Для агентов: `AIEditorStack/Docs/AGENT_NOTES.md` — известные ловушки (экспорт VT-текстур ломает Python, порядок декалей, типы сэмплеров VT, настройки цикла в шаблонах Niagara, устаревшее превью nDisplay), хелперы — в `ai_editor_stack.ue_helpers`.
+
+### Зачем мост
+
+До версии 1.4 установщик подключал Claude Code напрямую к `http://127.0.0.1:8000/mcp` редактора. В обычной работе это ломается: сессия, запущенная раньше редактора, после ~30 с попыток помечает сервер как упавший и больше не пробует; *Reconnect* в десктопном приложении запускает OAuth, которого в редакторе нет (`Dynamic Client Registration rejected (HTTP 404)`); вызов, который занимает редактор дольше 300 с, обрывается. С версии 1.5 `unreal-mcp` — это `bridge/unreal_mcp_bridge.py` (только стандартная библиотека), который:
+
+- сразу отвечает клиенту, а пока редактора нет, отдаёт список инструментов, который видел в прошлый раз (`%USERPROFILE%\.ue-ai-editor-stack\unreal_mcp_tools_cache.json`); когда редактор появился или перезапустился с другими инструментами, Claude Code получает команду обновить список;
+- открывает сессию редактора по первому запросу и заново — после перезапуска редактора;
+- во время долгих вызовов каждые 20 с шлёт уведомления о прогрессе, чтобы Claude Code не оборвал вызов по таймауту.
+
+Другие MCP-клиенты по-прежнему могут подключаться к `http://127.0.0.1:8000/mcp` напрямую. Тесты (редактор не нужен): `"<UE>\Engine\Binaries\ThirdParty\Python3\Win64\python.exe" -I bridge\test_bridge.py`.
 
 ## Если что-то не работает
 
-- **MCP не подключается, хотя редактор открыт.** Ищи строки `AI Editor Stack:` в `<Проект>\Saved\Logs\<Проект>.log`. Крайний вариант — набрать в консоли редактора `ModelContextProtocol.StartServer 8000` (без номера порта команда берёт порт по умолчанию, а не из настроек). Отключить защиту: переменная окружения `AIES_MCP_AUTOSTART=0` или `bAutoStartServer=False` в `EditorPerProjectUserSettings.ini` проекта.
+- **`unreal-mcp` в `/mcp` с ошибкой (ECONNREFUSED или *Dynamic Client Registration rejected*).** Это прямое HTTP-подключение из версии 1.4 и раньше. Перезапусти `.\install.ps1 -SkipVibeUE`, потом начни новую сессию Claude Code или один раз переподключи `unreal-mcp` в `/mcp`. `.\tools\mcp_check.ps1` показывает, как подключён Claude Code.
+- **Вызовы пишут *Unreal Editor is not reachable*, хотя редактор открыт.** Ищи строки `AI Editor Stack:` в `<Проект>\Saved\Logs\<Проект>.log`. Крайний вариант — набрать в консоли редактора `ModelContextProtocol.StartServer 8000` (без номера порта команда берёт порт по умолчанию, а не из настроек). Отключить защиту: переменная окружения `AIES_MCP_AUTOSTART=0` или `bAutoStartServer=False` в `EditorPerProjectUserSettings.ini` проекта.
 - **Настройки или токен Sketchfab «пропадают», если их записал Claude.** Десктопное приложение Claude — MSIX-пакет: всё новое, что оно или запущенные из него процессы создают в `%LOCALAPPDATA%` / `%APPDATA%`, Windows складывает в `%LOCALAPPDATA%\Packages\Claude_*\LocalCache`. Редактор, запущенный из меню Пуск, этих файлов не видит. С версии 1.4 установщик пишет INI процессом вне пакета, плагин при старте переносит такую секцию MCP в настоящий INI, а токен хранится вне AppData. Редактор, запущенный из оболочки Claude, видит перенаправленные файлы и может вести себя иначе — запускай редактор сам.
 
 ## Безопасность
@@ -112,6 +124,6 @@ Python-тулсет, зарегистрированный в Unreal MCP рядо
 2. Удалить секцию `ModelContextProtocolSettings` из INI выше.
 3. `claude mcp remove unreal-mcp -s user` и `claude plugin uninstall unreal-engine-skills-for-claude-code@claude-plugins-official`.
 4. Убрать блок `ue-ai-editor-stack` из `~/.claude/CLAUDE.md`.
-5. Удалить папку `%USERPROFILE%\.ue-ai-editor-stack` (и `%LOCALAPPDATA%\ue-ai-editor-stack` от версии 1.3 и старше): в ней токен Sketchfab (`sketchfab_token.txt`), а также исходники и сборка VibeUE. Чтобы убрать только токен, нажми *Удалить токен* в окне токена или запусти `.\tools\set_sketchfab_token.ps1 -Remove`. Импортированные модели и `Credits/Sketchfab.md` остаются в проектах.
+5. Удалить папку `%USERPROFILE%\.ue-ai-editor-stack` (и `%LOCALAPPDATA%\ue-ai-editor-stack` от версии 1.3 и старше): в ней MCP-мост и кэш его инструментов, токен Sketchfab (`sketchfab_token.txt`), а также исходники и сборка VibeUE. Чтобы убрать только токен, нажми *Удалить токен* в окне токена или запусти `.\tools\set_sketchfab_token.ps1 -Remove`. Импортированные модели и `Credits/Sketchfab.md` остаются в проектах.
 
 Проект не связан с Epic Games или Anthropic. Лицензия MIT.
